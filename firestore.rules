@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.admin == true || 
+        request.auth.token.role == 'admin' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isRegionalManager() {
+      return isAuthenticated() && 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'regional';
+    }
+
+    function userRegion() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.regionId;
+    }
+
+    // Auth requests collection
+    match /authRequests/{requestId} {
+      // Allow admins and regional managers to read
+      allow read: if isAuthenticated() && (isAdmin() || isRegionalManager());
+      
+      // Allow admins to write
+      allow write: if isAdmin();
+      
+      // Allow public creation for registration with data validation
+      allow create: if request.resource.data.status == 'pending' &&
+                   request.resource.data.email is string &&
+                   request.resource.data.name is string &&
+                   request.resource.data.staffCode is string &&
+                   request.resource.data.storeIds is list &&
+                   request.resource.data.primaryStoreId is string &&
+                   request.resource.data.role == 'team_member' &&
+                   request.resource.data.password is string;
+
+      // Allow users to read their own requests
+      allow read: if isAuthenticated() && 
+                 resource.data.email == request.auth.token.email;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      // Allow admins full access
+      allow read: if isAuthenticated();
+      allow write, create, update, delete: if isAdmin();
+      
+      // Allow users to update their own lastLoginAt
+      allow update: if request.auth.uid == userId && 
+                   request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastLoginAt', 'updatedAt']) &&
+                   request.resource.data.lastLoginAt is timestamp &&
+                   request.resource.data.updatedAt is timestamp;
+    }
+
+    // Salespeople collection
+    match /salespeople/{userId} {
+      allow read: if isAuthenticated() && (
+        isAdmin() || 
+        isRegionalManager() || 
+        request.auth.uid == userId
+      );
+      allow write: if isAdmin() || 
+        (isRegionalManager() && request.resource.data.regionId == userRegion());
+    }
+
+    // Stores collection
+    match /stores/{storeId} {
+      allow read: if isAuthenticated() || request.auth == null; // Allow public read for registration
+      allow write: if isAdmin() || 
+        (isRegionalManager() && resource.data.regionId == userRegion());
+    }
+
+    // Regions collection
+    match /regions/{regionId} {
+      allow read: if isAuthenticated() || request.auth == null; // Allow public read for registration
+      allow write: if isAdmin();
+    }
+
+    // Metrics collection
+    match /metrics/{metricId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // Import history
+    match /importHistory/{historyId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

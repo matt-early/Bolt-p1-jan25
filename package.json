@@ -1,0 +1,52 @@
+{
+  "name": "retail-metrics-dashboard",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --force",
+    "emulators": "firebase emulators:start --only auth,firestore,functions",
+    "build": "tsc && vite build",
+    "lint": "eslint src",
+    "preview": "vite preview",
+    "admin:setup": "tsx scripts/setupAdmin.ts",
+    "firebase": "firebase",
+    "firebase:login": "firebase login",
+    "firebase:init": "firebase init functions --project twodegrees-retail",
+    "firebase:deploy": "firebase deploy --only functions"
+  },
+  "dependencies": {
+    "@firebase/app-types": "^0.9.0",
+    "chart.js": "^4.4.1",
+    "firebase": "^10.7.2",
+    "firebase-admin": "^12.0.0",
+    "lucide-react": "^0.344.0",
+    "react": "^18.2.0",
+    "react-chartjs-2": "^5.2.0",
+    "react-datepicker": "^6.1.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.1",
+    "xlsx": "^0.18.5",
+    "lru-cache": "^10.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "dotenv": "^16.3.1",
+    "firebase-tools": "^13.4.1",
+    "@types/react": "^18.2.48",
+    "@types/react-datepicker": "^4.19.5",
+    "@types/react-dom": "^18.2.18",
+    "@vitejs/plugin-react": "^4.2.1",
+    "autoprefixer": "^10.4.17",
+    "eslint": "^8.56.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-plugin-react-refresh": "^0.4.5",
+    "globals": "^13.24.0",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1",
+    "tsx": "^4.7.0",
+    "vite": "^5.1.4"
+  }
+}
