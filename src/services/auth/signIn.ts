@@ -5,18 +5,21 @@ import { AUTH_SETTINGS } from '../../config/auth-settings';
 import { logOperation } from '../firebase/logging';
 import { retryAuthOperation } from './retry';
 import { handleAuthNetworkError } from './network';
-import { AUTH_ERROR_MESSAGES } from './errors';
+import { getDb } from '../firebase/db';
+import { AUTH_ERROR_MESSAGES, AuthError } from './errors';
 import { UserProfile, ROLE_MAPPING } from '../../types/auth';
 import { loadUserProfile } from './init';
 import { FirebaseError } from 'firebase/app';
 
+interface SignInResult {
+  user: User;
+  profile: UserProfile;
+  role: string;
+  redirectPath: string;
+}
+
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
-
-interface SignInResult {
-  user: any;
-  profile: UserProfile;
-}
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -34,7 +37,7 @@ const attemptFirestoreOperation = async <T>(
     throw error;
   }
 };
-export const signIn = async (email: string, password: string) => {
+export const signIn = async (email: string, password: string): Promise<SignInResult> => {
   try {
     logOperation('signIn', 'start');
     
@@ -82,11 +85,15 @@ export const signIn = async (email: string, password: string) => {
     // Load user profile
     logOperation('signIn', 'loading-profile');
     const profile = await loadUserProfile(userCredential.user.uid);
+    
     if (!profile) {
       logOperation('signIn', 'error', 'Failed to load user profile');
       throw new Error(AUTH_ERROR_MESSAGES['auth/user-not-found']);
     }
 
+    // Determine redirect path based on role
+    const redirectPath = getRedirectPath(profile.role);
+    
     // Update last login time
     try {
       const db = getDb();
@@ -94,7 +101,7 @@ export const signIn = async (email: string, password: string) => {
       const userRef = doc(db, 'users', userCredential.user.uid);
       await updateDoc(userRef, {
         lastLoginAt: timestamp,
-        role: ROLE_MAPPING[profile.role as keyof typeof ROLE_MAPPING] || profile.role
+        role: profile.role
       });
       
       // Update profile with new timestamp
@@ -108,14 +115,15 @@ export const signIn = async (email: string, password: string) => {
 
     logOperation('signIn', 'complete', { 
       uid: userCredential.user.uid,
-      role: profile.role
+      role: profile.role,
+      redirectPath
     });
     
-    // Return auth result with role for navigation
     return {
       user: userCredential.user,
       profile,
-      role: profile.role
+      role: profile.role,
+      redirectPath
     };
   } catch (error: any) {
     logOperation('signIn', 'error', error);
@@ -126,5 +134,18 @@ export const signIn = async (email: string, password: string) => {
     
     const message = error instanceof Error ? error.message : 'Unable to sign in at this time';
     throw new Error(message);
+  }
+};
+
+const getRedirectPath = (role: string): string => {
+  switch (role) {
+    case 'admin':
+      return '/admin';
+    case 'regional':
+      return '/regional';
+    case 'team_member':
+      return '/dashboard';
+    default:
+      return '/login';
   }
 };

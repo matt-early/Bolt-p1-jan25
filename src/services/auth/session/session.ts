@@ -1,9 +1,10 @@
 import { User } from 'firebase/auth';
 import { validateSession } from './validation';
 import { refreshSession, setupSessionRefresh } from './refresh';
-import { validateNetworkState, waitForNetwork } from './network';
+import { validateNetworkState } from './network';
 import { setupAuthCleanup, registerCleanup } from './cleanup';
 import { logOperation } from '../../firebase/logging';
+import { retry } from '../../firebase/retry';
 
 const INIT_GRACE_PERIOD = 500; // 500ms
 const MAX_REFRESH_ATTEMPTS = 3;
@@ -13,22 +14,19 @@ export const initializeAuthSession = async (user: User | null) => {
   try {
     if (!user) return false;
 
-    // Wait for network if offline
-    if (!navigator.onLine) {
-      const hasNetwork = await waitForNetwork(NETWORK_TIMEOUT);
-      if (!hasNetwork) {
-        logOperation('initializeAuthSession', 'warning', 'No network connection');
-        // Check for valid cached session
-        const cachedSession = sessionStorage.getItem('isAuthenticated');
-        const lastRefresh = sessionStorage.getItem('lastTokenRefresh');
-        if (cachedSession && lastRefresh) {
-          const age = Date.now() - parseInt(lastRefresh, 10);
-          if (age < 55 * 60 * 1000) { // 55 minutes
-            return true;
-          }
+    // Force token refresh to ensure claims are up to date
+    try {
+      await retry(
+        () => user.getIdToken(true),
+        {
+          maxAttempts: 3,
+          initialDelay: 1000,
+          operation: 'initializeAuthSession.refreshToken'
         }
-        return false;
-      }
+      );
+    } catch (error) {
+      logOperation('initializeAuthSession', 'error', 'Failed to refresh token');
+      return false;
     }
 
     const isValid = await validateSession(user);
@@ -38,7 +36,15 @@ export const initializeAuthSession = async (user: User | null) => {
       const cleanup = setupAuthCleanup(user);
       const refreshCleanup = setupSessionRefresh(
         user,
-        () => validateSession(user),
+        async () => {
+          try {
+            await user.getIdToken(true); // Force token refresh
+            return validateSession(user);
+          } catch (error) {
+            logOperation('sessionRefresh', 'error', error);
+            return false;
+          }
+        },
         (error) => {
           logOperation('sessionRefresh', 'error', error);
           cleanup();

@@ -15,6 +15,13 @@ import { retry } from '../firebase/utils';
 
 export const fetchPendingRequests = async (): Promise<AuthRequest[]> => {
   try {
+    // Check auth first
+    const auth = getAuth();
+    if (!auth.currentUser) {
+      logOperation('fetchPendingRequests', 'error', 'Not authenticated');
+      return [];
+    }
+
     const db = getDb();
     const requestsRef = collection(db, 'authRequests');
 
@@ -35,8 +42,11 @@ export const fetchPendingRequests = async (): Promise<AuthRequest[]> => {
       logOperation('fetchPendingRequests', 'success', { count: requests.length });
       return requests;
     } catch (error: any) {
-      // If index error, fall back to client-side filtering
-      if (error.code === 'failed-precondition' && error.message?.includes('indexes')) {
+      // Handle specific error cases
+      if (error.code === 'permission-denied') {
+        logOperation('fetchPendingRequests', 'warning', 'Permission denied - user may not be admin');
+        return [];
+      } else if (error.code === 'failed-precondition' && error.message?.includes('indexes')) {
         logOperation('fetchPendingRequests', 'warning', 'Falling back to client-side filtering');
         
         // Get all requests and filter client-side
@@ -55,7 +65,7 @@ export const fetchPendingRequests = async (): Promise<AuthRequest[]> => {
     }
   } catch (error) {
     logOperation('fetchPendingRequests', 'error', error);
-    throw error;
+    return []; // Return empty array instead of throwing
   }
 };
 

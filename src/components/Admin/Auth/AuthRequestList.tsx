@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { UserCheck, UserX, AlertCircle } from 'lucide-react';
-import { AuthRequest } from '../../../types/auth';
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { useNavigate } from 'react-router-dom';
+import type { AuthRequest, UserProfile } from '../../../types/auth';
 import { Store } from '../../../types';
 import { 
   fetchPendingAuthRequests, 
@@ -13,52 +15,86 @@ import { RequestList } from './components/RequestList';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { EmptyState } from './components/EmptyState';
 import { LoadingState } from './components/LoadingState';
-import { ExistingUserDialog } from './components/ExistingUserDialog';
 import { SuccessNotification } from '../../common/SuccessNotification';
 
+// Define extended request type with loading and force continue flags
+interface ExtendedAuthRequest extends AuthRequest {
+  loading?: boolean;
+  forceContinue?: boolean;
+}
+
+// Define approval data type
+interface ApprovalData extends Omit<UserProfile, 'id' | 'approved' | 'createdAt'> {
+  forceContinue?: boolean;
+}
+
+interface ExistingUserDetails {
+  email: string;
+  details: { 
+    auth: boolean; 
+    users: boolean; 
+    sales: boolean;
+    uid?: string;
+  };
+  request: ExtendedAuthRequest;
+}
+
 export const AuthRequestList: React.FC = () => {
-  const [requests, setRequests] = useState<AuthRequest[]>([]);
+  const [requests, setRequests] = useState<ExtendedAuthRequest[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
+  const [existingUserDetails, setExistingUserDetails] = useState<ExistingUserDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [existingUserDetails, setExistingUserDetails] = useState<{
-    email: string;
-    details: { 
-      auth: boolean; 
-      users: boolean; 
-      sales: boolean;
-      uid?: string;
-    };
-    request: AuthRequest;
-  } | null>(null);
   const { currentUser } = useAuth();
+  const navigate = useNavigate();
 
+  // Load requests when component mounts or currentUser changes
   useEffect(() => {
+    if (!currentUser?.uid) {
+      navigate('/login');
+      return;
+    }
+    
     loadRequests();
-  }, [currentUser]);
+  }, [currentUser, navigate]);
 
   const loadRequests = async () => {
     try {
-      if (!currentUser) return;
+      if (!currentUser?.uid) return;
+      
       setLoading(true);
       const [data, storesData] = await Promise.all([
         fetchPendingAuthRequests(),
         fetchStores()
       ]);
-      setRequests(data);
-      setStores(storesData);
+      
+      // Only update state if component is still mounted and user is still authenticated
+      if (currentUser) {
+        setRequests(data);
+        setStores(storesData);
+      }
+      
       setError(null);
     } catch (err) {
-      setError('Failed to load authentication requests');
+      const message = err instanceof Error ? err.message : 'Failed to load authentication requests';
+      if (message.includes('permission-denied')) {
+        navigate('/unauthorized');
+      } else {
+        setError(message);
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleApprove = async (request: AuthRequest) => {
+  const handleApprove = async (request: ExtendedAuthRequest) => {
     try {
-      if (!currentUser) return;
+      if (!currentUser) {
+        navigate('/login');
+        setError('Not authenticated');
+        return;
+      }
 
       setSuccessMessage(null);
       setError(null);
@@ -69,14 +105,17 @@ export const AuthRequestList: React.FC = () => {
       );
 
       try {
-        const result = await approveAuthRequest(request.id, currentUser.uid, {
+        const approvalData: ApprovalData = {
           email: request.email.toLowerCase().trim(),
           name: request.name,
           role: request.role,
           storeIds: request.storeIds,
           primaryStoreId: request.primaryStoreId,
-          staffCode: request.staffCode
-        });
+          staffCode: request.staffCode,
+          forceContinue: request.forceContinue
+        };
+
+        const result = await approveAuthRequest(request.id, currentUser.uid, approvalData);
 
         if (result.existingUser) {
           setExistingUserDetails({
@@ -84,29 +123,29 @@ export const AuthRequestList: React.FC = () => {
             details: result.existingUser,
             request
           });
+          setRequests(prev => 
+            prev.map(r => r.id === request.id ? { ...r, loading: false } : r)
+          );
           return;
         }
 
         if (result.success) {
-          // On success, remove from pending list
           setRequests(prev => prev.filter(r => r.id !== request.id));
-
-          // Show success message with more details
           setSuccessMessage(
             `Successfully approved ${request.name}'s request.\nA password reset email has been sent to ${request.email}.`
           );
+          await loadRequests(); // Refresh the list
         } else {
           setError(result.error || 'Failed to approve request');
         }
       } catch (err) {
         let message = 'Failed to approve request';
         
-        if (err instanceof Error) {
-          if (err.message.includes('permission-denied')) {
-            message = 'You do not have permission to approve requests';
-          } else {
-            message = err.message;
-          }
+        if (err instanceof Error && err.message.includes('permission-denied')) {
+          navigate('/unauthorized');
+          return;
+        } else if (err instanceof Error) {
+          message = err.message;
         }
         
         setError(message);
@@ -115,76 +154,19 @@ export const AuthRequestList: React.FC = () => {
       let message = 'Failed to approve request';
       
       if (err instanceof Error) {
+        if (err.message.includes('permission-denied')) {
+          navigate('/unauthorized');
+          return;
+        }
         message = err.message;
       }
       
       setError(message);
     } finally {
-      // Reset loading state
       setRequests(prev => 
         prev.map(r => r.id === request.id ? { ...r, loading: false } : r)
       );
     }
-  };
-
-  const handleContinueApproval = async () => {
-    if (!existingUserDetails || !currentUser) return;
-
-    const { request } = existingUserDetails;
-
-    try {
-      setError(null);
-      
-      const result = await approveAuthRequest(request.id, currentUser.uid, {
-        email: request.email,
-        name: request.name.trim(),
-        role: request.role, 
-        storeIds: request.storeIds || [],
-        primaryStoreId: request.primaryStoreId || '',
-        staffCode: request.staffCode || '',
-        forceContinue: true
-      });
-
-      if (result.success) {
-        // On success, remove from pending list
-        setRequests(prev => prev.filter(r => r.id !== request.id));
-
-        // Show success message with more details
-        setSuccessMessage(
-          `Successfully approved ${request.name}'s request.\nA password reset email has been sent to ${request.email}.`
-        );
-      }
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Failed to approve request');
-    } finally {
-      setExistingUserDetails(null);
-      // Reset loading state
-      setRequests(prev =>
-        prev.map(r => r.id === request.id ? { ...r, loading: false } : r)
-      );
-    }
-  };
-
-  const handleReject = async (requestId: string) => {
-    try {
-      if (!currentUser) return;
-      setSuccessMessage(null);
-      setError(null);
-      
-      const request = requests.find(r => r.id === requestId);
-      if (!request) return;
-      
-      await rejectAuthRequest(requestId, currentUser.uid, 'Request rejected by admin');
-      setRequests(requests.filter(r => r.id !== requestId));
-      
-      setSuccessMessage(`Successfully rejected ${request.name}'s request`);
-    } catch (err) {
-      setError('Failed to reject request');
-    }
-  };
-
-  const clearSuccessMessage = () => {
-    setSuccessMessage(null);
   };
 
   const handleDeleteExistingAccount = async () => {
@@ -206,11 +188,35 @@ export const AuthRequestList: React.FC = () => {
       await deleteAuthUser({ uid: existingUserDetails.details.uid });
 
       // After successful deletion, continue with approval
-      await handleApprove(existingUserDetails.request);
+      await handleApprove({
+        ...existingUserDetails.request,
+        forceContinue: true
+      });
       setExistingUserDetails(null);
     } catch (error) {
       setError('Failed to delete existing account. Please try again.');
     }
+  };
+  const handleReject = async (requestId: string) => {
+    try {
+      if (!currentUser) return;
+      setSuccessMessage(null);
+      setError(null);
+      
+      const request = requests.find(r => r.id === requestId);
+      if (!request) return;
+      
+      await rejectAuthRequest(requestId, currentUser.uid, 'Request rejected by admin');
+      setRequests(requests.filter(r => r.id !== requestId));
+      
+      setSuccessMessage(`Successfully rejected ${request.name}'s request`);
+    } catch (err) {
+      setError('Failed to reject request');
+    }
+  };
+
+  const clearSuccessMessage = () => {
+    setSuccessMessage(null);
   };
 
   if (loading) {
@@ -246,9 +252,8 @@ export const AuthRequestList: React.FC = () => {
         <ExistingUserDialog
           email={existingUserDetails.email}
           details={existingUserDetails.details}
-          onDelete={handleDeleteExistingAccount}
           onClose={() => setExistingUserDetails(null)}
-          onContinue={handleContinueApproval}
+          onDelete={handleDeleteExistingAccount}
         />
       )}
     </div>

@@ -10,10 +10,12 @@ import { initializeFirebaseServices } from '../services/firebase/init';
 import { LoadingScreen } from '../components/common/LoadingScreen';
 import { logOperation } from '../services/firebase/logging';
 import { initNetworkMonitoring, getNetworkStatus } from '../services/firebase/network';
+import { useNavigate } from 'react-router-dom';
 import type { UserProfile } from '../types/auth';
 import { signIn as firebaseSignIn } from '../services/auth';
-import { loadUserProfile } from '../services/auth/init'; 
+import { loadUserProfile } from '../services/auth/init';
 import { initializeAuthSession, clearSessionState } from '../services/auth/session';
+import { waitForNetwork } from '../services/firebase/network';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -38,12 +40,14 @@ export const useAuth = () => {
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState<boolean>(false);
   const [initAttempts, setInitAttempts] = useState<number>(0);
   const [isInitializing, setIsInitializing] = useState<boolean>(false);
+  const [authReady, setAuthReady] = useState<boolean>(false);
   const MAX_INIT_ATTEMPTS = 3;
   const RETRY_DELAY = 2000;
   const NETWORK_TIMEOUT = 30000; // 30 seconds
@@ -80,6 +84,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (mounted) {
           setIsInitialized(true);
           setInitAttempts(0);
+          setAuthReady(true);
           logOperation('AuthProvider.init', 'success');
         }
       } catch (error) {
@@ -164,17 +169,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (profile && mounted) {
             setUserProfile(profile);
             sessionStorage.setItem('isAuthenticated', 'true');
+            sessionStorage.setItem('userRole', profile.role);
             setCurrentUser(user);
+            setAuthReady(true);
           } else {
             logOperation('authStateChange', 'warning', 'No user profile found');
             clearAuthState();
           }
         } else {
           clearAuthState();
+          setAuthReady(true);
         }
       } catch (err) {
         logOperation('authStateChange', 'error', err);
         clearAuthState();
+        setAuthReady(true);
       } finally {
         if (mounted) {
           setLoading(false);
@@ -194,26 +203,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       logOperation('AuthProvider.signIn', 'start', { email });
       
-      const { user, profile, role } = await firebaseSignIn(email, password);
+      const result = await firebaseSignIn(email, password);
       
       // Set auth state
-      setCurrentUser(user);
-      setUserProfile(profile);
+      setCurrentUser(result.user);
+      setUserProfile(result.profile);
       sessionStorage.setItem('isAuthenticated', 'true');
-      sessionStorage.setItem('userRole', role);
-      
-      // Determine redirect based on role
-      const redirectPath = role === 'admin' ? '/admin' :
-                         role === 'regional' ? '/regional' : 
-                         '/dashboard';
+      sessionStorage.setItem('userRole', result.profile.role);
       
       logOperation('AuthProvider.signIn', 'success', { 
-        role,
-        redirect: redirectPath
+        role: result.profile.role,
+        redirect: result.redirectPath
       });
       
-      // Use window.location for hard redirect to ensure clean state
-      window.location.href = redirectPath;
+      // Use navigate for SPA routing
+      navigate(result.redirectPath, { replace: true });
 
     } catch (error) {
       logOperation('signIn', 'error', error);
@@ -240,10 +244,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       clearSessionState();
       setUserProfile(null);
+      setAuthReady(false);
       setCurrentUser(null);
       const auth = getAuth();
       await firebaseSignOut(auth);
-      window.location.href = '/login';
+      navigate('/login', { replace: true });
     } catch (error) {
       logOperation('signOut', 'error', error);
       const message = error instanceof Error ? error.message : 'Failed to sign out';
@@ -251,6 +256,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw new Error(message);
     }
   };
+
+  // Only render children when auth is ready
+  if (!authReady) {
+    return <LoadingScreen 
+      error={error}
+      networkError={!navigator.onLine ? 'No internet connection' : networkError}
+      retryCount={initAttempts}
+      maxRetries={MAX_INIT_ATTEMPTS}
+      isOffline={!getNetworkStatus().isOnline}
+    />;
+  }
 
   const value = {
     currentUser,
@@ -260,18 +276,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     signOut,
     loading,
     error,
-    isInitialized
+    isInitialized,
+    authReady
   };
-  
-  if (loading || !isInitialized) {
-    return <LoadingScreen 
-      error={error}
-      networkError={!navigator.onLine ? 'No internet connection' : networkError}
-      retryCount={initAttempts}
-      maxRetries={MAX_INIT_ATTEMPTS}
-      isOffline={!getNetworkStatus().isOnline}
-    />;
-  }
 
   return (
     <AuthContext.Provider value={value}>

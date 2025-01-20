@@ -11,13 +11,13 @@ const NETWORK_TIMEOUT = 30000; // 30 seconds
 
 export const verifyAdminPermissions = async (): Promise<boolean> => {
   try {
-    const auth = await getAuth();
+    const auth = getAuth();
     if (!auth) {
       throw new Error('Auth not initialized');
     }
     
     const currentUser = auth.currentUser;
-    const { isOnline, isInitialized } = getNetworkStatus();
+    const { isOnline } = getNetworkStatus();
     
     if (!isOnline) {
       logOperation('verifyAdminPermissions', 'waiting-for-network');
@@ -40,28 +40,18 @@ export const verifyAdminPermissions = async (): Promise<boolean> => {
       });
       return true;
     }
-    // Check if user is default admin first
-    if (currentUser.email === AUTH_SETTINGS.DEFAULT_ADMIN.EMAIL) {
-      logOperation('verifyAdminPermissions', 'success', { 
-        reason: 'default admin',
-        email: currentUser.email 
-      });
-      return true;
-    }
-
-    // Force token refresh
-    await retry<void>(
+    // Force token refresh and get latest claims
+    await retry(
       () => currentUser.getIdToken(true),
       {
         maxAttempts: 3,
         initialDelay: 1000,
-        operation: 'verifyAdminPermissions.getIdToken'
+        operation: 'verifyAdminPermissions.refreshToken'
       }
     );
 
-    // Get fresh token result with claims
     const tokenResult = await retry(
-      () => currentUser.getIdTokenResult(true),
+      () => currentUser.getIdTokenResult(),
       {
         maxAttempts: 3,
         initialDelay: 1000,
@@ -82,7 +72,7 @@ export const verifyAdminPermissions = async (): Promise<boolean> => {
       () => getDoc(userRef),
       {
         maxAttempts: 3,
-        delayMs: 1000,
+        initialDelay: 1000,
         operation: 'verifyAdminPermissions.getDoc'
       }
     );
@@ -96,6 +86,19 @@ export const verifyAdminPermissions = async (): Promise<boolean> => {
     }
 
     const isAdmin = userDoc.data()?.role === 'admin';
+    
+    // If admin in Firestore but not in claims, force token refresh
+    if (isAdmin && !tokenResult.claims?.admin) {
+      await retry(
+        () => currentUser.getIdToken(true),
+        {
+          maxAttempts: 3,
+          initialDelay: 1000,
+          operation: 'verifyAdminPermissions.forceRefresh'
+        }
+      );
+    }
+
     logOperation('verifyAdminPermissions', isAdmin ? 'success' : 'error', { 
       reason: isAdmin ? 'admin role' : 'not admin',
       role: userDoc.data()?.role,
