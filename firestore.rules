@@ -8,9 +8,15 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && (
-        request.auth.token.admin == true || 
-        request.auth.token.role == 'admin' ||
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        // Check default admin first
+        request.auth.token.email == 'matt.early@2degrees.nz' ||
+        // Then check admin claim
+        request.auth.token.admin == true ||
+        // Finally check role and Firestore
+        (
+          request.auth.token.role == 'admin' &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+        )
       );
     }
 
@@ -25,13 +31,13 @@ service cloud.firestore {
 
     // Auth requests collection
     match /authRequests/{requestId} {
-      // Allow admins and regional managers to read
-      allow read: if isAuthenticated() && (isAdmin() || isRegionalManager());
+      // Allow admins full access
+      allow read, write: if isAdmin();
       
-      // Allow admins to write
-      allow write: if isAdmin();
+      // Allow regional managers to read
+      allow read: if isRegionalManager();
       
-      // Allow public creation for registration with data validation
+      // Allow public creation for registration
       allow create: if request.resource.data.status == 'pending' &&
                    request.resource.data.email is string &&
                    request.resource.data.name is string &&
@@ -49,8 +55,10 @@ service cloud.firestore {
     // Users collection
     match /users/{userId} {
       // Allow admins full access
+      allow read, write, create, update, delete: if isAdmin();
+      
+      // Allow users to read their own profile
       allow read: if isAuthenticated();
-      allow write, create, update, delete: if isAdmin();
       
       // Allow users to update their own lastLoginAt
       allow update: if request.auth.uid == userId && 
@@ -61,13 +69,14 @@ service cloud.firestore {
 
     // Salespeople collection
     match /salespeople/{userId} {
-      allow read: if isAuthenticated() && (
-        isAdmin() || 
-        isRegionalManager() || 
-        request.auth.uid == userId
-      );
-      allow write: if isAdmin() || 
-        (isRegionalManager() && request.resource.data.regionId == userRegion());
+      // Allow admins full access
+      allow read, write, create, update, delete: if isAdmin();
+      
+      // Allow regional managers to read all and write in their region
+      allow read: if isRegionalManager();
+      allow write: if isRegionalManager() && request.resource.data.regionId == userRegion();
+      // Allow users to read their own data
+      allow read: if request.auth.uid == userId;
     }
 
     // Stores collection

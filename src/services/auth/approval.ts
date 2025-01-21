@@ -15,8 +15,10 @@ import {
 import { FirebaseError } from 'firebase/app';
 import { getAuth, getDb } from '../firebase/db';
 import { UserProfile } from '../../types/auth';
+import { getNetworkStatus } from '../firebase/network';
 import { logOperation } from '../firebase/logging';
 import { verifyAdminPermissions } from './admin/permissions';
+import { retry } from '../firebase/retry';
 
 interface ApprovalResult {
   success: boolean;
@@ -40,29 +42,42 @@ export const approveAuthRequest = async (
   try {
     // Get fresh auth instance
     const auth = getAuth();
-    if (!auth.currentUser) {
-      throw new Error('User must be authenticated');
+    const currentUser = auth.currentUser;
+    const { isOnline } = getNetworkStatus();
+    let hasPermission = false;
+    
+    if (!isOnline) {
+      throw new Error('No network connection available');
     }
 
-    // Force token refresh before checking permissions
-    await retry(
-      () => auth.currentUser!.getIdToken(true),
-      {
-        maxAttempts: 3,
-        initialDelay: 1000,
-        operation: 'approveAuthRequest.refreshToken'
+    if (!currentUser) {
+      logOperation('approveAuthRequest', 'error', 'Not authenticated');
+      throw new Error('You must be signed in to perform this action');
+    }
+    
+    // Try multiple times to verify admin permissions
+    for (let attempt = 0; attempt < 3; attempt++) {
+      hasPermission = await verifyAdminPermissions();
+      if (hasPermission) {
+        break;
       }
-    );
+      
+      // Wait before retrying
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+      }
+    }
 
-    // Verify admin permissions first
-    const hasPermission = await verifyAdminPermissions();
-    if (!hasPermission) {
-      logOperation('approveAuthRequest', 'error', 'Permission denied');
+    if (!hasPermission) { 
+      logOperation('approveAuthRequest', 'error', 'Admin permissions required');
       throw new Error('You do not have permission to approve requests');
     }
 
+    logOperation('approveAuthRequest', 'permissions-verified');
+
     const db = getDb();
 
+    // Validate request exists and is pending
     // Validate inputs
     if (!normalizedEmail) {
       logOperation('approveAuthRequest', 'error', 'Missing email');
@@ -78,6 +93,7 @@ export const approveAuthRequest = async (
       throw new Error('Authentication request not found');
     }
 
+    // Start batch operation
     const requestData = requestDoc.data();
     
     // Check if request is already processed
@@ -93,7 +109,7 @@ export const approveAuthRequest = async (
     // Create new user account
     try {
       logOperation('approveAuthRequest', 'creating-user');
-      
+
       try {
         // Try to create new user
         const { user } = await createUserWithEmailAndPassword(
@@ -103,6 +119,7 @@ export const approveAuthRequest = async (
         );
         userId = user.uid;
         isNewUser = true;
+        logOperation('approveAuthRequest', 'user-created', { userId });
       } catch (error) {
         if (error instanceof FirebaseError && error.code === 'auth/email-already-in-use') {
           // Check if we have existing profiles
@@ -146,51 +163,107 @@ export const approveAuthRequest = async (
     // Start batch write
     const batch = writeBatch(db);
 
+    
     // Create user profile
     const userRef = doc(db, 'users', userId);
-    batch.set(userRef, {
+    const userProfileData = {
       email: normalizedEmail,
       name: userData.name.trim(),
       role: userData.role,
-      staffCode: userData.staffCode?.trim(),
-      storeIds: userData.storeIds,
-      primaryStoreId: userData.primaryStoreId,
+      admin: userData.role === 'admin', // Add admin flag to profile
       approved: true,
-      createdAt: new Date().toISOString(),
-      lastLoginAt: null
-    });
+      staffCode: userData.staffCode?.trim() || '',
+      storeIds: userData.storeIds || [],
+      primaryStoreId: userData.primaryStoreId,
+      approved: true, 
+      createdAt: serverTimestamp(),
+      lastLoginAt: null,
+      updatedAt: serverTimestamp()
+    };
+    
+    batch.set(userRef, userProfileData);
+    logOperation('approveAuthRequest', 'profile-created');
+    
+    // Set admin custom claims immediately if needed
+    if (userData.role === 'admin') {
+      try {
+        const functions = getFunctions();
+        const setCustomClaims = httpsCallable(functions, 'setCustomClaims');
+        await setCustomClaims({
+          uid: userId,
+          claims: {
+            admin: true,
+            role: 'admin',
+            timestamp: Date.now()
+          }
+        });
+        logOperation('approveAuthRequest', 'admin-claims-set');
+        
+        // Force token refresh after setting claims
+        const auth = getAuth();
+        if (auth.currentUser) {
+          await auth.currentUser.getIdToken(true);
+        }
+
+      } catch (error) {
+        logOperation('approveAuthRequest', 'error', 'Failed to set admin claims');
+        throw error;
+      }
+    }
+
+    logOperation('approveAuthRequest', 'user-profile-created');
 
     // Create salesperson profile for team members
     if (userData.role === 'team_member') {
       const salespersonRef = doc(db, 'salespeople', userId);
+      logOperation('approveAuthRequest', 'creating-team-member-profile');
       batch.set(salespersonRef, {
         email: normalizedEmail,
         name: userData.name.trim(),
-        role: userData.role,
+        role: 'team_member',
         staffCode: userData.staffCode?.trim(),
         storeIds: userData.storeIds,
         primaryStoreId: userData.primaryStoreId,
         approved: true,
-        createdAt: serverTimestamp()
+        createdAt: new Date().toISOString(),
+        updatedAt: serverTimestamp()
       });
     }
 
     // Update request status
+    logOperation('approveAuthRequest', 'updating-request-status');
     batch.update(requestRef, {
       status: 'approved',
       reviewedBy: reviewerId,
       reviewedAt: serverTimestamp()
     });
-
-    // Commit all changes
-    logOperation('approveAuthRequest', 'committing-changes');
-    await batch.commit();
     
-    logOperation('approveAuthRequest', 'success', { 
-      userId,
-      isNewUser 
-    });
-
+    // Commit all changes
+    logOperation('approveAuthRequest', 'committing-batch');
+    logOperation('approveAuthRequest', 'committing-changes');
+    try {
+      await retry(async () => {
+        // Verify admin permissions again before commit
+        const hasPermission = await verifyAdminPermissions();
+        if (!hasPermission) {
+          throw new Error('Admin permissions required for this operation');
+        }
+        await batch.commit();
+      }, {
+        operation: 'approveAuthRequest.commitBatch',
+        maxAttempts: 5,
+        initialDelay: 1000,
+        waitForNetwork: true
+      });
+      
+      logOperation('approveAuthRequest', 'success');
+    } catch (error) {
+      logOperation('approveAuthRequest', 'error', {
+        message: 'Failed to commit batch',
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      throw error;
+    }
     return { 
       success: true,
       userId

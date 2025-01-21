@@ -2,20 +2,22 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   User,
   onAuthStateChanged,
-  sendPasswordResetEmail, 
+  sendPasswordResetEmail,
   signOut as firebaseSignOut
 } from 'firebase/auth';
 import { getAuth } from '../services/firebase/db';
 import { initializeFirebaseServices } from '../services/firebase/init';
-import { LoadingScreen } from '../components/common/LoadingScreen';
 import { logOperation } from '../services/firebase/logging';
-import { initNetworkMonitoring, getNetworkStatus } from '../services/firebase/network';
+import { initNetworkMonitoring } from '../services/firebase/network';
+import type { NetworkStatus } from '../services/firebase/network';
 import { useNavigate } from 'react-router-dom';
 import type { UserProfile } from '../types/auth';
-import { signIn as firebaseSignIn } from '../services/auth';
+import { signIn as firebaseSignIn, signOut } from '../services/auth';
 import { loadUserProfile } from '../services/auth/init';
 import { initializeAuthSession, clearSessionState } from '../services/auth/session';
-import { waitForNetwork } from '../services/firebase/network';
+import { waitForNetwork, getNetworkStatus } from '../services/firebase/network';
+import { retry } from '../services/firebase/retry';
+import { LoadingScreen } from '../components/common/LoadingScreen';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -49,8 +51,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isInitializing, setIsInitializing] = useState<boolean>(false);
   const [authReady, setAuthReady] = useState<boolean>(false);
   const MAX_INIT_ATTEMPTS = 3;
-  const RETRY_DELAY = 2000;
-  const NETWORK_TIMEOUT = 30000; // 30 seconds
+  const RETRY_DELAY = 1000;
+  const NETWORK_TIMEOUT = 15000;
   
   // Initialize Firebase on mount
   useEffect(() => {
@@ -107,7 +109,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     };
 
+    // Start initialization immediately
     init();
+
     return () => {
       mounted = false;
       if (timeoutId) {
@@ -138,7 +142,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let mounted = true;
     let unsubscribe: (() => void) | undefined;
     
+    // Skip auth checks if not initialized
     if (!isInitialized) {
+      setAuthReady(true);
       return;
     }
     
@@ -161,6 +167,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const isValid = await initializeAuthSession(user);
           if (!isValid && mounted) {
             clearAuthState();
+            setAuthReady(true);
             return;
           }
 
@@ -175,6 +182,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } else {
             logOperation('authStateChange', 'warning', 'No user profile found');
             clearAuthState();
+            setAuthReady(true);
           }
         } else {
           clearAuthState();

@@ -3,7 +3,9 @@ import { type UserRole } from '../../types/auth';
 import { validateEmail } from '../../utils/validation/emailValidator';
 import { query, collection, where, getDocs, limit } from 'firebase/firestore';
 import { getDb } from '../firebase/db';
+import { FirebaseError } from 'firebase/app';
 import { logOperation } from '../firebase/logging';
+import { retry } from '../firebase/retry';
 
 // Validate role is allowed
 export const isValidRole = (role: string): role is UserRole => {
@@ -30,11 +32,65 @@ export const isDefaultAdmin = (email: string): boolean => {
 
 export const checkEmailExists = async (email: string): Promise<boolean> => {
   try {
+    const db = getDb();
     const normalizedEmail = email.toLowerCase().trim();
-    // Skip email check if permission denied - will be handled during registration
+    
+    // Check users collection
+    const usersQuery = query(
+      collection(db, 'users'),
+      where('email', '==', normalizedEmail),
+      limit(1)
+    );
+
+    const userDocs = await retry(
+      () => getDocs(usersQuery),
+      {
+        maxAttempts: 3,
+        initialDelay: 1000,
+        operation: 'checkEmailExists.users'
+      }
+    );
+
+    if (!userDocs.empty) {
+      logOperation('checkEmailExists', 'found', { collection: 'users' });
+      return true;
+    }
+
+    // Check auth requests collection
+    const requestsQuery = query(
+      collection(db, 'authRequests'),
+      where('email', '==', normalizedEmail),
+      where('status', '==', 'pending'),
+      limit(1)
+    );
+
+    const requestDocs = await retry(
+      () => getDocs(requestsQuery),
+      {
+        maxAttempts: 3,
+        initialDelay: 1000,
+        operation: 'checkEmailExists.requests'
+      }
+    );
+
+    if (!requestDocs.empty) {
+      logOperation('checkEmailExists', 'found', { collection: 'authRequests' });
+      return true;
+    }
+
+    logOperation('checkEmailExists', 'not-found');
     return false;
   } catch (error) {
-    logOperation('checkEmailExists', 'error', error);
+    // Handle permission errors gracefully
+    if (error instanceof Error && error.message.includes('permission-denied')) {
+      logOperation('checkEmailExists', 'warning', 'Permission denied - skipping check');
+      return false;
+    }
+
+    logOperation('checkEmailExists', 'error', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      email: email
+    });
     return false;
   }
 };

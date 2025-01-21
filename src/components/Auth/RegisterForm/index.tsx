@@ -3,12 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { UserPlus } from 'lucide-react';
 import { Store, Region } from '../../../types';
 import { validateEmail } from '../../../utils/validation/emailValidator';
-import { checkEmailExists } from '../../../services/auth/validation';
+import { checkEmailExists } from '../../../services/auth';
 import { fetchStores } from '../../../services/stores';
 import { fetchRegions } from '../../../services/regions';
 import { createAuthRequest } from '../../../services/auth';
 import { PasswordInput } from './PasswordInput';
-import { StoreSelection } from './StoreSelection';
 
 const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d]{8,}$/;
 const STAFF_CODE_REGEX = /^[A-Za-z0-9-]+$/;

@@ -1,7 +1,14 @@
 import { https } from "firebase-functions/v2";
 import * as admin from "firebase-admin";
+import cors from 'cors';
 import type { UserClaims } from "../types/auth";
 
+const corsHandler = cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+});
 interface SetClaimsData {
   uid: string;
   claims: UserClaims;
@@ -13,6 +20,15 @@ interface SetClaimsResponse {
 
 // Function to set custom claims
 export const setCustomClaims = https.onCall<SetClaimsData, SetClaimsResponse>(async (request): Promise<SetClaimsResponse> => {
+  // Handle CORS
+  await new Promise((resolve) => corsHandler(request.raw, request.raw.res!, resolve));
+
+  // Handle preflight requests
+  if (request.raw.method === 'OPTIONS') {
+    request.raw.res!.status(204).send('');
+    return;
+  }
+
   const { data, auth } = request;
 
   // Verify caller is authenticated and admin

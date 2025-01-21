@@ -1,7 +1,6 @@
 import React, { Component, ErrorInfo } from 'react';
 import { logOperation } from '../../services/firebase/logging';
 import { clearSessionState } from '../../services/auth/session';
-import { AlertTriangle } from 'lucide-react';
 
 interface Props {
   children: React.ReactNode;
@@ -44,10 +43,10 @@ export class AuthErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
           <div className="bg-white rounded-lg shadow-md max-w-md w-full p-6">
             <div className="flex items-center justify-center mb-4">
-              <AlertTriangle className="h-12 w-12 text-red-500" />
+              <div className="h-12 w-12 text-red-500">⚠️</div>
             </div>
             <h2 className="text-xl font-semibold text-gray-900 text-center mb-4">
               Authentication Error
@@ -57,7 +56,7 @@ export class AuthErrorBoundary extends Component<Props, State> {
             </p>
             <button
               onClick={() => window.location.href = '/login'}
-              className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors"
+              className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
               Return to Sign In
             </button>

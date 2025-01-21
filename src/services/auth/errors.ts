@@ -4,8 +4,9 @@ import { FirebaseError } from 'firebase/app';
 export const AUTH_ERROR_MESSAGES = {
   'auth/user-not-found': 'No account exists with this email address. Please check your email or register for a new account.',
   'auth/wrong-password': 'Incorrect password. Please try again or use the "Forgot Password" link below.',
-  'auth/invalid-login-credentials': 'Invalid login credentials. Please check your email and password.',
   'auth/missing-credentials': 'Email and password are required',
+  'auth/service-unavailable': 'Authentication service is temporarily unavailable. Please try again.',
+  'auth/invalid-login-credentials': 'Invalid login credentials. Please check your email and password.',
   'auth/email-already-in-use': 'An account already exists with this email address',
   'auth/invalid-credential': 'Invalid login credentials. Please check your email and password.',
   'auth/invalid-email': 'Invalid email address format',

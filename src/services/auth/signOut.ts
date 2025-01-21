@@ -13,9 +13,6 @@ export const signOut = async () => {
     // Clear all caches
     await clearAllCaches();
     
-    // Clear all auth state
-    clearAuthState();
-    
     // Sign out from Firebase
     await firebaseSignOut(auth);
     

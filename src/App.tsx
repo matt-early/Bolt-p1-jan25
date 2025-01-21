@@ -17,7 +17,6 @@ import { SalespersonMetrics } from './components/Admin/Metrics/SalespersonMetric
 import { ImportDataPage } from './components/Admin/ImportData/ImportDataPage';
 import { AuthRequestList } from './components/Admin/Auth/AuthRequestList';
 import { UserManagement } from './components/Admin/Auth/UserManagement';
-import { LoadingScreen } from './components/common/LoadingScreen';
 
 const App: React.FC = () => {
   return (

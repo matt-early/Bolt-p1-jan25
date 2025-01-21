@@ -1,6 +1,6 @@
 import { signInWithEmailAndPassword, type AuthError as FirebaseAuthError } from 'firebase/auth';
 import { doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { getFunctions, httpsCallable, type Functions } from 'firebase/functions';
+import { getAuth } from '../firebase/db';
 import { AUTH_SETTINGS } from '../../config/auth-settings';
 import { logOperation } from '../firebase/logging';
 import { retryAuthOperation } from './retry';
@@ -18,25 +18,6 @@ interface SignInResult {
   redirectPath: string;
 }
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY = 1000;
-
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-const attemptFirestoreOperation = async <T>(
-  operation: () => Promise<T>,
-  retryCount = 0
-): Promise<T> => {
-  try {
-    return await operation();
-  } catch (error: any) {
-    if (error.code === 'unavailable' && retryCount < MAX_RETRIES) {
-      await delay(RETRY_DELAY * Math.pow(2, retryCount));
-      return attemptFirestoreOperation(operation, retryCount + 1);
-    }
-    throw error;
-  }
-};
 export const signIn = async (email: string, password: string): Promise<SignInResult> => {
   try {
     logOperation('signIn', 'start');
@@ -44,11 +25,11 @@ export const signIn = async (email: string, password: string): Promise<SignInRes
     // Wait for Firebase initialization
     const auth = getAuth();
     if (!auth) {
-      throw new Error('Authentication service not initialized');
+      throw new Error(AUTH_ERROR_MESSAGES['auth/service-unavailable']);
     }
 
     if (!email || !password) {
-      throw new Error(AUTH_ERROR_MESSAGES.default);
+      throw new Error(AUTH_ERROR_MESSAGES['auth/missing-credentials']);
     }
 
     const normalizedEmail = email.toLowerCase().trim();
@@ -57,20 +38,14 @@ export const signIn = async (email: string, password: string): Promise<SignInRes
     try {
       logOperation('signIn', 'authenticating', { email: normalizedEmail });
       
-      userCredential = await retryAuthOperation(
-        () => signInWithEmailAndPassword(auth, normalizedEmail, password),
-        {
-          maxAttempts: 3,
-          baseDelay: 1000,
-          operation: 'signIn'
-        }
-      );
+      userCredential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
 
       logOperation('signIn', 'authenticated', { uid: userCredential.user.uid });
     } catch (error) {
       if (error instanceof FirebaseError) {
         const message = AUTH_ERROR_MESSAGES[error.code as keyof typeof AUTH_ERROR_MESSAGES] || 
                        AUTH_ERROR_MESSAGES.default;
+        logOperation('signIn', 'error', { code: error.code, message });
         throw new Error(message);
       }
       throw error;

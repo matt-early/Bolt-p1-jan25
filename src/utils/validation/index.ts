@@ -1,6 +1,7 @@
 export * from './validators';
 export * from './types';
 export * from './constants';
+export * from './emailValidator';
 export * from './headerValidator';
 export * from './rowValidator';
 export * from './excelValidator';

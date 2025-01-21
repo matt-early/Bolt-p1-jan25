@@ -22,11 +22,12 @@ import { UserProfile, AuthRequest, UserRole, ROLE_MAPPING } from '../types/auth'
 import { logOperation } from './firebase/logging';
 import { fetchPendingRequests, updateRequestStatus } from './auth/requests';
 import { approveAuthRequest } from './auth/approval';
+import { checkEmailExists } from './auth/validation';
 
 // Re-export auth functions
 export * from './auth/signIn';
 export * from './auth/passwordReset';
-export { approveAuthRequest };
+export { approveAuthRequest, checkEmailExists };
 
 export const createAuthRequest = async (params: {
   email: string;

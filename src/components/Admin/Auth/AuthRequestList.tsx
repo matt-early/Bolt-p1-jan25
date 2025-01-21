@@ -2,7 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { UserCheck, UserX, AlertCircle } from 'lucide-react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../../providers/AuthProvider';
 import type { AuthRequest, UserProfile } from '../../../types/auth';
+import { LoadingState } from '../../common/LoadingState';
 import { Store } from '../../../types';
 import { 
   fetchPendingAuthRequests, 
@@ -10,12 +12,10 @@ import {
   rejectAuthRequest 
 } from '../../../services/auth';
 import { fetchStores } from '../../../services/stores';
-import { useAuth } from '../../../providers/AuthProvider';
 import { RequestList } from './components/RequestList';
 import { ErrorDisplay } from './components/ErrorDisplay';
-import { EmptyState } from './components/EmptyState';
-import { LoadingState } from './components/LoadingState';
 import { SuccessNotification } from '../../common/SuccessNotification';
+import { ExistingUserDialog } from './components/ExistingUserDialog';
 
 // Define extended request type with loading and force continue flags
 interface ExtendedAuthRequest extends AuthRequest {

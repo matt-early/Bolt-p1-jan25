@@ -1,13 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { LogIn, Mail, Lock } from 'lucide-react';
-import { getAuth, getDb } from '../../services/firebase';
-import { doc, getDoc } from 'firebase/firestore';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { useAuth } from '../../providers/AuthProvider';
 import { FirebaseError } from 'firebase/app';
 import { AUTH_ERROR_MESSAGES } from '../../services/auth/errors';
 import { logOperation } from '../../services/firebase/logging';
-import { AUTH_SETTINGS } from '../../config/auth-settings';
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof FirebaseError) {
@@ -23,12 +20,12 @@ const getErrorMessage = (error: unknown): string => {
 };
 
 export const SignInPage: React.FC = () => {
+  const { signIn } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [networkStatus, setNetworkStatus] = useState(navigator.onLine);
   const [loading, setLoading] = useState(false);
-  const navigate = useNavigate();
 
   // Monitor network status
   useEffect(() => {
@@ -47,45 +44,17 @@ export const SignInPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!email.trim() || !password.trim()) {
-      setError('Email and password are required');
+    setError('');
+    setLoading(true);
+
+    if (!networkStatus) {
+      setError('No internet connection. Please check your network and try again.');
+      setLoading(false);
       return;
     }
     
     try {
-      setLoading(true);
-      setError('');
-
-      if (!networkStatus) {
-        throw new Error('No internet connection. Please check your network and try again.');
-      }
-      
-      const auth = getAuth();
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      
-      // Check if admin user
-      const isAdmin = userCredential.user.email === AUTH_SETTINGS.DEFAULT_ADMIN.EMAIL;
-      if (isAdmin) {
-        navigate('/admin');
-        return;
-      }
-      
-      // Check user role in Firestore
-      const db = getDb();
-      const userDoc = await getDoc(doc(db, 'users', userCredential.user.uid));
-      const role = userDoc.data()?.role;
-      
-      // Route based on role
-      if (role === 'admin') {
-        navigate('/admin');
-      } else if (role === 'regional') {
-        navigate('/regional');
-      } else {
-        navigate('/dashboard');
-      }
-      
-      setError(''); // Clear any existing errors
-      logOperation('signIn', 'success');
+      await signIn(email.trim(), password.trim());
     } catch (error) {
       const errorMessage = getErrorMessage(error);
       setError(errorMessage);

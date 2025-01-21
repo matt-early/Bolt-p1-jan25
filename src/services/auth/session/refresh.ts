@@ -1,32 +1,32 @@
 import { User } from 'firebase/auth';
 import { logOperation } from '../../firebase/logging';
 import { getNetworkStatus } from '../../firebase/network';
-import { handleTokenError, validateTokenAge } from './handlers';
+import { handleTokenError } from './handlers';
 import { setSessionState } from './state';
+import { retry } from '../../firebase/retry';
 
 const SESSION_TIMEOUT = 55 * 60 * 1000; // 55 minutes
 const REFRESH_THRESHOLD = 5 * 60 * 1000; // 5 minutes
-const REFRESH_RETRY_DELAY = 1000; // 1 second
+const TOKEN_REFRESH_ATTEMPTS = 3;
+const TOKEN_REFRESH_DELAY = 1000;
 
 export const refreshSession = async (user: User): Promise<void> => {
   try {
     const { isOnline } = getNetworkStatus();
     
     if (!isOnline) {
-      logOperation('refreshSession', 'warning', 'Offline - skipping refresh');
-      return;
+      throw new Error('No network connection available');
     }
 
-    // Get current token result
-    const currentToken = await user.getIdTokenResult();
-    const tokenAge = currentToken.issuedAtTime ? 
-      Date.now() - new Date(currentToken.issuedAtTime).getTime() : 
-      Infinity;
-
-    // Only refresh if token is old enough
-    if (tokenAge > REFRESH_THRESHOLD) {
-      await user.getIdToken(true);
-    }
+    // Force token refresh
+    await retry(
+      () => user.getIdToken(true),
+      {
+        maxAttempts: TOKEN_REFRESH_ATTEMPTS,
+        initialDelay: TOKEN_REFRESH_DELAY,
+        operation: 'refreshSession.refreshToken'
+      }
+    );
     
     // Update session state after successful refresh
     const now = Date.now();
@@ -39,12 +39,14 @@ export const refreshSession = async (user: User): Promise<void> => {
     // Update session storage
     sessionStorage.setItem('lastTokenRefresh', now.toString());
     sessionStorage.setItem('tokenExpiration', (now + SESSION_TIMEOUT).toString());
-    sessionStorage.setItem('lastTokenRefresh', now.toString());
 
     logOperation('refreshSession', 'success');
   } catch (error) {
     logOperation('refreshSession', 'error', error);
-    await handleTokenError(user, error);
+    const handled = await handleTokenError(user, error);
+    if (!handled) {
+      throw error;
+    }
     throw error;
   }
 };

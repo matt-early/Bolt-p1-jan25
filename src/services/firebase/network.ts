@@ -1,5 +1,6 @@
 import { logOperation } from './logging';
 
+// Export network status interface
 export interface NetworkStatus {
   isOnline: boolean;
   lastOnline: Date | null;
@@ -8,6 +9,7 @@ export interface NetworkStatus {
   lastAttempt: Date | null;
 }
 
+// Initialize network status
 let networkStatus: NetworkStatus = {
   isOnline: navigator.onLine,
   lastOnline: navigator.onLine ? new Date() : null,
@@ -18,6 +20,7 @@ let networkStatus: NetworkStatus = {
 
 const MIN_RETRY_INTERVAL = 5000; // Minimum 5 seconds between retries
 
+// Export network status getter
 // Initialize network monitoring immediately
 const initializeNetworkStatus = () => {
   const handleOnline = () => {
